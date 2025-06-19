@@ -53,6 +53,22 @@ static uint8_t rotary_state;
 static uint8_t rotary_counter;
 static uint8_t button_state;
 
+// Power meter simulation variables
+static float simulated_voltage = 0.0f;    // Simulated voltage (V)
+static float simulated_current = 0.0f;    // Simulated current (A)
+static float simulated_power = 0.0f;      // Calculated power (W)
+static float accumulated_energy = 0.0f;   // Accumulated energy (Wh)
+static uint32_t last_timestamp = 0;       // For energy integration
+
+// Peak value tracking
+static float peak_voltage = 0.0f;
+static float peak_current = 0.0f;
+static float peak_power = 0.0f;
+
+// Button handling for reset functions
+static uint32_t button_press_time = 0;
+static uint8_t button_long_press_handled = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -68,6 +84,83 @@ static void MX_TIM6_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/**
+  * @brief  Convert ADC value to simulated voltage
+  * @param  adc_value Raw ADC value (0-4095)
+  * @retval Simulated voltage in volts (0-30V)
+  */
+float Convert_ADC_to_Voltage(uint32_t adc_value)
+{
+    // POT_1 (ADC_CHANNEL_10): 0-4095 → 0-30V
+    return (float)adc_value * 30.0f / 4095.0f;
+}
+
+/**
+  * @brief  Convert ADC value to simulated current
+  * @param  adc_value Raw ADC value (0-4095)
+  * @retval Simulated current in amperes (0-5A)
+  */
+float Convert_ADC_to_Current(uint32_t adc_value)
+{
+    // POT_2 (ADC_CHANNEL_11): 0-4095 → 0-5A
+    return (float)adc_value * 5.0f / 4095.0f;
+}
+
+/**
+  * @brief  Calculate simulated power from voltage and current
+  * @param  voltage Simulated voltage in volts
+  * @param  current Simulated current in amperes
+  * @retval Calculated power in watts
+  */
+float Calculate_Power(float voltage, float current)
+{
+    return voltage * current;
+}
+
+/**
+  * @brief  Update accumulated energy using trapezoidal integration
+  * @param  power Current power in watts
+  * @param  delta_time Time interval in milliseconds
+  */
+void Update_Energy(float power, uint32_t delta_time)
+{
+    // Convert delta_time from ms to hours for Wh calculation
+    float delta_hours = (float)delta_time / (1000.0f * 3600.0f);
+    
+    // Simple rectangular integration: E += P * dt
+    accumulated_energy += power * delta_hours;
+}
+
+/**
+  * @brief  Update peak values if current values are higher
+  * @param  voltage Current voltage value
+  * @param  current Current current value
+  * @param  power Current power value
+  */
+void Update_Peaks(float voltage, float current, float power)
+{
+    if (voltage > peak_voltage) peak_voltage = voltage;
+    if (current > peak_current) peak_current = current;
+    if (power > peak_power) peak_power = power;
+}
+
+/**
+  * @brief  Reset all peak values to zero
+  */
+void Reset_Peaks(void)
+{
+    peak_voltage = 0.0f;
+    peak_current = 0.0f;
+    peak_power = 0.0f;
+}
+
+/**
+  * @brief  Reset accumulated energy to zero
+  */
+void Reset_Energy(void)
+{
+    accumulated_energy = 0.0f;
+}
 
 /**
   * @brief  Interrupt handler for TIM6 timer
@@ -76,26 +169,98 @@ static void MX_TIM6_Init(void);
   */
 void Timer_Interrupt_Handler(void)
 {
-	uint32_t pot1_value = Get_ADC_Value(ADC_CHANNEL_10);
-	uint32_t pot2_value = Get_ADC_Value(ADC_CHANNEL_11);
-	char line1_str[20] = {0};
-	char line2_str[20] = {0};
-	sprintf(line1_str, "P1:%04u   P2:%04u", (uint16_t)pot1_value, (uint16_t)pot2_value);
-	sprintf(line2_str, "ROT:%03u SWITCH:%s", rotary_counter, button_state ? " ON" : "OFF");
+	// Read ADC values from potentiometers
+	uint32_t pot1_value = Get_ADC_Value(ADC_CHANNEL_10);  // Voltage potentiometer
+	uint32_t pot2_value = Get_ADC_Value(ADC_CHANNEL_11);  // Current potentiometer
+	
+	// Convert ADC values to simulated physical quantities
+	simulated_voltage = Convert_ADC_to_Voltage(pot1_value);
+	simulated_current = Convert_ADC_to_Current(pot2_value);
+	simulated_power = Calculate_Power(simulated_voltage, simulated_current);
+	
+	// Calculate time delta for energy integration
+	uint32_t current_timestamp = HAL_GetTick();
+	uint32_t delta_time = current_timestamp - last_timestamp;
+	last_timestamp = current_timestamp;
+	
+	// Update accumulated energy (only if not first call)
+	if (delta_time > 0 && delta_time < 1000) {  // Sanity check: delta should be ~100ms
+		Update_Energy(simulated_power, delta_time);
+	}
+	
+	// Update peak values
+	Update_Peaks(simulated_voltage, simulated_current, simulated_power);
+	
+	// Prepare display strings
+	char line1_str[21] = {0};
+	char line2_str[21] = {0};
+	char line3_str[21] = {0};
+	
+	// Display format: V: XX.XV  I: X.XXA
+	//                P: XXXW  E: X.XXXkWh
+	sprintf(line1_str, "V:%4.1fV  I:%4.2fA", simulated_voltage, simulated_current);
+	
+	if (accumulated_energy < 1.0f) {
+		// Display in Wh for small values
+		sprintf(line2_str, "P:%5.1fW E:%3.0fWh", simulated_power, accumulated_energy * 1000.0f);
+	} else {
+		// Display in kWh for larger values  
+		sprintf(line2_str, "P:%5.1fW E:%5.3fkWh", simulated_power, accumulated_energy);
+	}
+	
+	// Optional third line with encoder/button (can be removed if space needed)
+	sprintf(line3_str, "ROT:%03u SWITCH:%s", rotary_counter, button_state ? "ON " : "OFF");
+	
+	// Clear screen and display power meter data
+	ssd1306_Fill(Black);
 	ssd1306_SetCursor(0, 0);
 	ssd1306_WriteString(line1_str, Font_7x10, White);
 	ssd1306_SetCursor(0, 11);
 	ssd1306_WriteString(line2_str, Font_7x10, White);
+	ssd1306_SetCursor(0, 22);
+	ssd1306_WriteString(line3_str, Font_6x8, White);  // Smaller font for third line
 	ssd1306_UpdateScreen();
 }
 
 /**
   * @brief  Interrupt handler for User Button GPIO
-  * @note	This function is called when a rising edge is detected on User Button input pin
+  * @note	This function handles button press/release for reset functions
+  *         - Short press: Reset peaks
+  *         - Long press (>2s): Reset energy
   */
 void User_Button_Interrupt_Handler(void)
 {
-	button_state = HAL_GPIO_ReadPin(USER_BUTTON_GPIO_Port, USER_BUTTON_Pin);
+	uint8_t current_button_state = HAL_GPIO_ReadPin(USER_BUTTON_GPIO_Port, USER_BUTTON_Pin);
+	
+	if (current_button_state && !button_state) {
+		// Button pressed (rising edge)
+		button_press_time = HAL_GetTick();
+		button_long_press_handled = 0;
+	}
+	else if (!current_button_state && button_state) {
+		// Button released (falling edge)
+		uint32_t press_duration = HAL_GetTick() - button_press_time;
+		
+		if (press_duration >= 2000 && !button_long_press_handled) {
+			// Long press: Reset energy
+			Reset_Energy();
+		}
+		else if (press_duration >= 50 && press_duration < 2000) {
+			// Short press: Reset peaks (with debounce)
+			Reset_Peaks();
+		}
+	}
+	else if (current_button_state && button_state) {
+		// Button held down - check for long press
+		uint32_t press_duration = HAL_GetTick() - button_press_time;
+		if (press_duration >= 2000 && !button_long_press_handled) {
+			// Long press detected - reset energy immediately
+			Reset_Energy();
+			button_long_press_handled = 1;
+		}
+	}
+	
+	button_state = current_button_state;
 }
 
 /**
@@ -193,10 +358,25 @@ int main(void)
   MX_I2C1_Init();
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
+  // Initialize OLED display
   ssd1306_Init();
   ssd1306_Fill(Black);
+  ssd1306_SetCursor(0, 0);
+  ssd1306_WriteString("Power Meter v1.0", Font_7x10, White);
+  ssd1306_SetCursor(0, 11);
+  ssd1306_WriteString("Initializing...", Font_7x10, White);
   ssd1306_UpdateScreen();
+  
+  // Initialize power meter variables
+  last_timestamp = HAL_GetTick();
+  Reset_Energy();
+  Reset_Peaks();
+  
+  // Start timer for periodic measurements
   HAL_TIM_Base_Start_IT(&htim6);
+  
+  // Brief startup delay
+  HAL_Delay(1000);
 
   /* USER CODE END 2 */
 

@@ -58,6 +58,15 @@ void User_Button_Interrupt_Handler(void);
 void Rotary_Encoder_Interrupt_Handler(void);
 uint32_t Get_ADC_Value(uint32_t adc_channel);
 
+// Power meter simulation functions
+float Convert_ADC_to_Voltage(uint32_t adc_value);
+float Convert_ADC_to_Current(uint32_t adc_value);
+float Calculate_Power(float voltage, float current);
+void Update_Energy(float power, uint32_t delta_time);
+void Update_Peaks(float voltage, float current, float power);
+void Reset_Peaks(void);
+void Reset_Energy(void);
+
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
