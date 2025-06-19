@@ -67,6 +67,12 @@ void Update_Peaks(float voltage, float current, float power);
 void Reset_Peaks(void);
 void Reset_Energy(void);
 
+// Menu system functions
+void Handle_Menu_Navigation(int8_t direction);
+void Handle_Menu_Action(uint8_t press_type);
+void Display_Current_Menu(void);
+void Display_Power_Meter(void);
+
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

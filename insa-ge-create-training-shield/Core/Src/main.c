@@ -69,6 +69,21 @@ static float peak_power = 0.0f;
 static uint32_t button_press_time = 0;
 static uint8_t button_long_press_handled = 0;
 
+// Menu system variables
+typedef enum {
+    MENU_POWER_METER = 0,    // Main power meter display
+    MENU_MAIN,               // Main menu
+    MENU_PEAKS,              // Peak values display
+    MENU_SETTINGS,           // Settings menu
+    MENU_RESET,              // Reset menu
+    MENU_ABOUT               // About/Info
+} MenuState_t;
+
+static MenuState_t current_menu = MENU_POWER_METER;
+static uint8_t menu_selection = 0;      // Current menu item selection
+static uint8_t menu_changed = 1;        // Flag to trigger display update
+static uint32_t last_activity_time = 0; // For auto-return to power meter
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -163,13 +178,281 @@ void Reset_Energy(void)
 }
 
 /**
+  * @brief  Handle rotary encoder input for menu navigation
+  * @param  direction: 1 for clockwise, -1 for counter-clockwise
+  */
+void Handle_Menu_Navigation(int8_t direction)
+{
+    last_activity_time = HAL_GetTick();
+    menu_changed = 1;
+    
+    switch (current_menu) {
+        case MENU_MAIN:
+            // Navigate main menu items
+            if (direction > 0) {
+                menu_selection = (menu_selection + 1) % 4; // 4 main menu items
+            } else {
+                menu_selection = (menu_selection == 0) ? 3 : menu_selection - 1;
+            }
+            break;
+            
+        case MENU_SETTINGS:
+            // Navigate settings menu items  
+            if (direction > 0) {
+                menu_selection = (menu_selection + 1) % 2; // 2 settings items
+            } else {
+                menu_selection = (menu_selection == 0) ? 1 : menu_selection - 1;
+            }
+            break;
+            
+        case MENU_RESET:
+            // Navigate reset menu items
+            if (direction > 0) {
+                menu_selection = (menu_selection + 1) % 3; // 3 reset items
+            } else {
+                menu_selection = (menu_selection == 0) ? 2 : menu_selection - 1;
+            }
+            break;
+            
+        default:
+            // Other menus don't have navigation
+            break;
+    }
+}
+
+/**
+  * @brief  Handle button press for menu actions
+  * @param  press_type: 0 = short press, 1 = long press
+  */
+void Handle_Menu_Action(uint8_t press_type)
+{
+    last_activity_time = HAL_GetTick();
+    menu_changed = 1;
+    
+    if (press_type == 1) { // Long press - always go back/up
+        switch (current_menu) {
+            case MENU_POWER_METER:
+                current_menu = MENU_MAIN;
+                menu_selection = 0;
+                break;
+                
+            default:
+                current_menu = MENU_POWER_METER;
+                menu_selection = 0;
+                break;
+        }
+    } else { // Short press - enter/confirm
+        switch (current_menu) {
+            case MENU_POWER_METER:
+                current_menu = MENU_MAIN;
+                menu_selection = 0;
+                break;
+                
+            case MENU_MAIN:
+                switch (menu_selection) {
+                    case 0: current_menu = MENU_POWER_METER; break;  // Back to Power Meter
+                    case 1: current_menu = MENU_PEAKS; break;        // Peak Values
+                    case 2: current_menu = MENU_SETTINGS; menu_selection = 0; break; // Settings
+                    case 3: current_menu = MENU_RESET; menu_selection = 0; break;    // Reset
+                }
+                break;
+                
+            case MENU_PEAKS:
+                current_menu = MENU_MAIN;
+                menu_selection = 1;
+                break;
+                
+            case MENU_SETTINGS:
+                switch (menu_selection) {
+                    case 0: current_menu = MENU_ABOUT; break;      // About
+                    case 1: current_menu = MENU_MAIN; menu_selection = 2; break; // Back
+                }
+                break;
+                
+            case MENU_RESET:
+                switch (menu_selection) {
+                    case 0: Reset_Peaks(); current_menu = MENU_MAIN; menu_selection = 3; break;   // Reset Peaks
+                    case 1: Reset_Energy(); current_menu = MENU_MAIN; menu_selection = 3; break;  // Reset Energy
+                    case 2: current_menu = MENU_MAIN; menu_selection = 3; break;                  // Cancel
+                }
+                break;
+                
+            case MENU_ABOUT:
+                current_menu = MENU_SETTINGS;
+                menu_selection = 0;
+                break;
+        }
+    }
+}
+
+/**
+  * @brief  Display current menu on OLED
+  */
+void Display_Current_Menu(void)
+{
+    char line1[21] = {0};
+    char line2[21] = {0};
+    char line3[21] = {0};
+    
+    // Clear screen
+    ssd1306_Fill(Black);
+    
+    switch (current_menu) {
+        case MENU_POWER_METER:
+            Display_Power_Meter();
+            return; // Power meter has its own display logic
+            
+        case MENU_MAIN:
+            ssd1306_SetCursor(0, 0);
+            ssd1306_WriteString("=== MAIN MENU ===", Font_6x8, White);
+            
+            sprintf(line1, "%s Power Meter", (menu_selection == 0) ? ">" : " ");
+            sprintf(line2, "%s Peak Values", (menu_selection == 1) ? ">" : " ");
+            sprintf(line3, "%s Settings", (menu_selection == 2) ? ">" : " ");
+            
+            ssd1306_SetCursor(0, 10);
+            ssd1306_WriteString(line1, Font_6x8, White);
+            ssd1306_SetCursor(0, 18);
+            ssd1306_WriteString(line2, Font_6x8, White);
+            ssd1306_SetCursor(0, 26);
+            ssd1306_WriteString(line3, Font_6x8, White);
+            
+            // Show "Reset" option if there's space or on next "page"
+            if (menu_selection == 3) {
+                ssd1306_SetCursor(0, 26);
+                ssd1306_WriteString("> Reset Options", Font_6x8, White);
+            }
+            break;
+            
+        case MENU_PEAKS:
+            ssd1306_SetCursor(0, 0);
+            ssd1306_WriteString("=== PEAK VALUES ===", Font_6x8, White);
+            
+            // Display peak values using integer formatting
+            int pv_int = (int)peak_voltage;
+            int pv_frac = (int)((peak_voltage - pv_int) * 10.0f);
+            int pi_int = (int)peak_current;
+            int pi_frac = (int)((peak_current - pi_int) * 100.0f);
+            int pp_int = (int)peak_power;
+            int pp_frac = (int)((peak_power - pp_int) * 10.0f);
+            
+            sprintf(line1, "V: %d.%dV", pv_int, pv_frac);
+            sprintf(line2, "I: %d.%02dA", pi_int, pi_frac);
+            sprintf(line3, "P: %d.%dW", pp_int, pp_frac);
+            
+            ssd1306_SetCursor(0, 10);
+            ssd1306_WriteString(line1, Font_7x10, White);
+            ssd1306_SetCursor(0, 20);
+            ssd1306_WriteString(line2, Font_7x10, White);
+            ssd1306_SetCursor(70, 20);
+            ssd1306_WriteString(line3, Font_7x10, White);
+            break;
+            
+        case MENU_SETTINGS:
+            ssd1306_SetCursor(0, 0);
+            ssd1306_WriteString("=== SETTINGS ===", Font_6x8, White);
+            
+            sprintf(line1, "%s About", (menu_selection == 0) ? ">" : " ");
+            sprintf(line2, "%s Back", (menu_selection == 1) ? ">" : " ");
+            
+            ssd1306_SetCursor(0, 12);
+            ssd1306_WriteString(line1, Font_7x10, White);
+            ssd1306_SetCursor(0, 22);
+            ssd1306_WriteString(line2, Font_7x10, White);
+            break;
+            
+        case MENU_RESET:
+            ssd1306_SetCursor(0, 0);
+            ssd1306_WriteString("=== RESET ===", Font_6x8, White);
+            
+            sprintf(line1, "%s Reset Peaks", (menu_selection == 0) ? ">" : " ");
+            sprintf(line2, "%s Reset Energy", (menu_selection == 1) ? ">" : " ");
+            sprintf(line3, "%s Cancel", (menu_selection == 2) ? ">" : " ");
+            
+            ssd1306_SetCursor(0, 10);
+            ssd1306_WriteString(line1, Font_6x8, White);
+            ssd1306_SetCursor(0, 18);
+            ssd1306_WriteString(line2, Font_6x8, White);
+            ssd1306_SetCursor(0, 26);
+            ssd1306_WriteString(line3, Font_6x8, White);
+            break;
+            
+        case MENU_ABOUT:
+            ssd1306_SetCursor(0, 0);
+            ssd1306_WriteString("Power Meter v1.0", Font_7x10, White);
+            ssd1306_SetCursor(0, 12);
+            ssd1306_WriteString("STM32L053R8", Font_6x8, White);
+            ssd1306_SetCursor(0, 20);
+            ssd1306_WriteString("Test Development", Font_6x8, White);
+            ssd1306_SetCursor(0, 28);
+            ssd1306_WriteString("Board - INSA-GE", Font_6x8, White);
+            break;
+    }
+    
+    ssd1306_UpdateScreen();
+}
+
+/**
+  * @brief  Display power meter data (separated from menu system)
+  */
+void Display_Power_Meter(void)
+{
+    char line1_str[21] = {0};
+    char line2_str[21] = {0};
+    char line3_str[21] = {0};
+    
+    // Convert float to integer parts for display (avoiding %f)
+    // Voltage: XX.X format (1 decimal place)
+    int v_int = (int)simulated_voltage;
+    int v_frac = (int)((simulated_voltage - v_int) * 10.0f);
+    if (v_frac < 0) v_frac = -v_frac;
+    
+    // Current: X.XX format (2 decimal places)  
+    int i_int = (int)simulated_current;
+    int i_frac = (int)((simulated_current - i_int) * 100.0f);
+    if (i_frac < 0) i_frac = -i_frac;
+    
+    // Power: XXX.X format (1 decimal place)
+    int p_int = (int)simulated_power;
+    int p_frac = (int)((simulated_power - p_int) * 10.0f);
+    if (p_frac < 0) p_frac = -p_frac;
+    
+    // Energy handling
+    if (accumulated_energy < 1.0f) {
+        // Display in Wh for small values (integer Wh)
+        int e_wh = (int)(accumulated_energy * 1000.0f);
+        sprintf(line1_str, "V:%d.%dV  I:%d.%02dA", v_int, v_frac, i_int, i_frac);
+        sprintf(line2_str, "P:%d.%dW E:%dWh", p_int, p_frac, e_wh);
+    } else {
+        // Display in kWh for larger values (X.XXX format)
+        int e_int = (int)accumulated_energy;
+        int e_frac = (int)((accumulated_energy - e_int) * 1000.0f);
+        if (e_frac < 0) e_frac = -e_frac;
+        sprintf(line1_str, "V:%d.%dV  I:%d.%02dA", v_int, v_frac, i_int, i_frac);
+        sprintf(line2_str, "P:%d.%dW E:%d.%03dkWh", p_int, p_frac, e_int, e_frac);
+    }
+    
+    sprintf(line3_str, "ROT:%03u BTN:%s", rotary_counter, button_state ? "ON " : "OFF");
+    
+    // Clear screen and display power meter data
+    ssd1306_Fill(Black);
+    ssd1306_SetCursor(0, 0);
+    ssd1306_WriteString(line1_str, Font_7x10, White);
+    ssd1306_SetCursor(0, 11);
+    ssd1306_WriteString(line2_str, Font_7x10, White);
+    ssd1306_SetCursor(0, 22);
+    ssd1306_WriteString(line3_str, Font_6x8, White);
+    ssd1306_UpdateScreen();
+}
+
+/**
   * @brief  Interrupt handler for TIM6 timer
   * @note	This function is called when the timer is reloaded
   *         It reads ADC values from potentiometer inputs and update screen infos
   */
 void Timer_Interrupt_Handler(void)
 {
-	// Read ADC values from potentiometers
+	// Read ADC values from potentiometers (always needed for power calculations)
 	uint32_t pot1_value = Get_ADC_Value(ADC_CHANNEL_10);  // Voltage potentiometer
 	uint32_t pot2_value = Get_ADC_Value(ADC_CHANNEL_11);  // Current potentiometer
 	
@@ -191,54 +474,19 @@ void Timer_Interrupt_Handler(void)
 	// Update peak values
 	Update_Peaks(simulated_voltage, simulated_current, simulated_power);
 	
-	// Prepare display strings
-	char line1_str[21] = {0};
-	char line2_str[21] = {0};
-	char line3_str[21] = {0};
-	
-	// Convert float to integer parts for display (avoiding %f)
-	// Voltage: XX.X format (1 decimal place)
-	int v_int = (int)simulated_voltage;
-	int v_frac = (int)((simulated_voltage - v_int) * 10.0f);
-	if (v_frac < 0) v_frac = -v_frac;  // Handle negative fractions
-	
-	// Current: X.XX format (2 decimal places)  
-	int i_int = (int)simulated_current;
-	int i_frac = (int)((simulated_current - i_int) * 100.0f);
-	if (i_frac < 0) i_frac = -i_frac;  // Handle negative fractions
-	
-	// Power: XXX.X format (1 decimal place)
-	int p_int = (int)simulated_power;
-	int p_frac = (int)((simulated_power - p_int) * 10.0f);
-	if (p_frac < 0) p_frac = -p_frac;  // Handle negative fractions
-	
-	// Energy handling
-	if (accumulated_energy < 1.0f) {
-		// Display in Wh for small values (integer Wh)
-		int e_wh = (int)(accumulated_energy * 1000.0f);
-		sprintf(line1_str, "V:%d.%dV  I:%d.%02dA", v_int, v_frac, i_int, i_frac);
-		sprintf(line2_str, "P:%d.%dW E:%dWh", p_int, p_frac, e_wh);
-	} else {
-		// Display in kWh for larger values (X.XXX format)
-		int e_int = (int)accumulated_energy;
-		int e_frac = (int)((accumulated_energy - e_int) * 1000.0f);
-		if (e_frac < 0) e_frac = -e_frac;  // Handle negative fractions
-		sprintf(line1_str, "V:%d.%dV  I:%d.%02dA", v_int, v_frac, i_int, i_frac);
-		sprintf(line2_str, "P:%d.%dW E:%d.%03dkWh", p_int, p_frac, e_int, e_frac);
+	// Check for auto-return to power meter (30 seconds timeout)
+	if (current_menu != MENU_POWER_METER && 
+	    (current_timestamp - last_activity_time) > 30000) {
+		current_menu = MENU_POWER_METER;
+		menu_selection = 0;
+		menu_changed = 1;
 	}
 	
-	// Optional third line with encoder/button (can be removed if space needed)
-	sprintf(line3_str, "ROT:%03u SWITCH:%s", rotary_counter, button_state ? "ON " : "OFF");
-	
-	// Clear screen and display power meter data
-	ssd1306_Fill(Black);
-	ssd1306_SetCursor(0, 0);
-	ssd1306_WriteString(line1_str, Font_7x10, White);
-	ssd1306_SetCursor(0, 11);
-	ssd1306_WriteString(line2_str, Font_7x10, White);
-	ssd1306_SetCursor(0, 22);
-	ssd1306_WriteString(line3_str, Font_6x8, White);  // Smaller font for third line
-	ssd1306_UpdateScreen();
+	// Update display only if menu changed or we're in power meter mode
+	if (menu_changed || current_menu == MENU_POWER_METER) {
+		Display_Current_Menu();
+		menu_changed = 0;
+	}
 }
 
 /**
@@ -261,20 +509,20 @@ void User_Button_Interrupt_Handler(void)
 		uint32_t press_duration = HAL_GetTick() - button_press_time;
 		
 		if (press_duration >= 2000 && !button_long_press_handled) {
-			// Long press: Reset energy
-			Reset_Energy();
+			// Long press: Menu navigation
+			Handle_Menu_Action(1); // Long press
 		}
 		else if (press_duration >= 50 && press_duration < 2000) {
-			// Short press: Reset peaks (with debounce)
-			Reset_Peaks();
+			// Short press: Menu navigation (with debounce)
+			Handle_Menu_Action(0); // Short press
 		}
 	}
 	else if (current_button_state && button_state) {
 		// Button held down - check for long press
 		uint32_t press_duration = HAL_GetTick() - button_press_time;
 		if (press_duration >= 2000 && !button_long_press_handled) {
-			// Long press detected - reset energy immediately
-			Reset_Energy();
+			// Long press detected - handle menu action immediately
+			Handle_Menu_Action(1); // Long press
 			button_long_press_handled = 1;
 		}
 	}
@@ -294,6 +542,8 @@ void Rotary_Encoder_Interrupt_Handler(void)
 	uint8_t rotary_new = HAL_GPIO_ReadPin(ROT_CHA_GPIO_Port, ROT_CHA_Pin) << 1;
 	rotary_new += HAL_GPIO_ReadPin(ROT_CHB_GPIO_Port, ROT_CHB_Pin);
 	if (rotary_new != rotary_state) {
+		int8_t direction = 0;
+		
 		if (((rotary_state == 0b00) && (rotary_new == 0b10)) || ((rotary_state == 0b10) && (rotary_new == 0b11)) ||
 				((rotary_state == 0b11) && (rotary_new == 0b01)) || ((rotary_state == 0b01) && (rotary_new == 0b00))) {
 			rotary_buffer ++;
@@ -303,13 +553,21 @@ void Rotary_Encoder_Interrupt_Handler(void)
 			rotary_buffer --;
 		}
 		rotary_state = rotary_new;
+		
 		if (rotary_buffer > 3) {
 			rotary_counter ++;
 			rotary_buffer = 0;
+			direction = 1;  // Clockwise
 		}
 		if (rotary_buffer < -3) {
 			rotary_counter --;
 			rotary_buffer = 0;
+			direction = -1; // Counter-clockwise
+		}
+		
+		// Handle menu navigation if we detected a direction change
+		if (direction != 0) {
+			Handle_Menu_Navigation(direction);
 		}
 	}
 }
@@ -388,8 +646,14 @@ int main(void)
   
   // Initialize power meter variables
   last_timestamp = HAL_GetTick();
+  last_activity_time = HAL_GetTick();
   Reset_Energy();
   Reset_Peaks();
+  
+  // Initialize menu system
+  current_menu = MENU_POWER_METER;
+  menu_selection = 0;
+  menu_changed = 1;
   
   // Start timer for periodic measurements
   HAL_TIM_Base_Start_IT(&htim6);
