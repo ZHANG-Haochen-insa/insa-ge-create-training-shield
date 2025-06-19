@@ -196,16 +196,35 @@ void Timer_Interrupt_Handler(void)
 	char line2_str[21] = {0};
 	char line3_str[21] = {0};
 	
-	// Display format: V: XX.XV  I: X.XXA
-	//                P: XXXW  E: X.XXXkWh
-	sprintf(line1_str, "V:%4.1fV  I:%4.2fA", simulated_voltage, simulated_current);
+	// Convert float to integer parts for display (avoiding %f)
+	// Voltage: XX.X format (1 decimal place)
+	int v_int = (int)simulated_voltage;
+	int v_frac = (int)((simulated_voltage - v_int) * 10.0f);
+	if (v_frac < 0) v_frac = -v_frac;  // Handle negative fractions
 	
+	// Current: X.XX format (2 decimal places)  
+	int i_int = (int)simulated_current;
+	int i_frac = (int)((simulated_current - i_int) * 100.0f);
+	if (i_frac < 0) i_frac = -i_frac;  // Handle negative fractions
+	
+	// Power: XXX.X format (1 decimal place)
+	int p_int = (int)simulated_power;
+	int p_frac = (int)((simulated_power - p_int) * 10.0f);
+	if (p_frac < 0) p_frac = -p_frac;  // Handle negative fractions
+	
+	// Energy handling
 	if (accumulated_energy < 1.0f) {
-		// Display in Wh for small values
-		sprintf(line2_str, "P:%5.1fW E:%3.0fWh", simulated_power, accumulated_energy * 1000.0f);
+		// Display in Wh for small values (integer Wh)
+		int e_wh = (int)(accumulated_energy * 1000.0f);
+		sprintf(line1_str, "V:%d.%dV  I:%d.%02dA", v_int, v_frac, i_int, i_frac);
+		sprintf(line2_str, "P:%d.%dW E:%dWh", p_int, p_frac, e_wh);
 	} else {
-		// Display in kWh for larger values  
-		sprintf(line2_str, "P:%5.1fW E:%5.3fkWh", simulated_power, accumulated_energy);
+		// Display in kWh for larger values (X.XXX format)
+		int e_int = (int)accumulated_energy;
+		int e_frac = (int)((accumulated_energy - e_int) * 1000.0f);
+		if (e_frac < 0) e_frac = -e_frac;  // Handle negative fractions
+		sprintf(line1_str, "V:%d.%dV  I:%d.%02dA", v_int, v_frac, i_int, i_frac);
+		sprintf(line2_str, "P:%d.%dW E:%d.%03dkWh", p_int, p_frac, e_int, e_frac);
 	}
 	
 	// Optional third line with encoder/button (can be removed if space needed)
