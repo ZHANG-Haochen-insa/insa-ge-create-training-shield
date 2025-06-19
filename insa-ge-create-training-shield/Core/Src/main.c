@@ -303,24 +303,50 @@ void Display_Current_Menu(void)
             return; // Power meter has its own display logic
             
         case MENU_MAIN:
-            ssd1306_SetCursor(0, 0);
-            ssd1306_WriteString("=== MAIN MENU ===", Font_6x8, White);
-            
-            sprintf(line1, "%s Power Meter", (menu_selection == 0) ? ">" : " ");
-            sprintf(line2, "%s Peak Values", (menu_selection == 1) ? ">" : " ");
-            sprintf(line3, "%s Settings", (menu_selection == 2) ? ">" : " ");
-            
-            ssd1306_SetCursor(0, 10);
-            ssd1306_WriteString(line1, Font_6x8, White);
-            ssd1306_SetCursor(0, 18);
-            ssd1306_WriteString(line2, Font_6x8, White);
-            ssd1306_SetCursor(0, 26);
-            ssd1306_WriteString(line3, Font_6x8, White);
-            
-            // Show "Reset" option if there's space or on next "page"
-            if (menu_selection == 3) {
-                ssd1306_SetCursor(0, 26);
-                ssd1306_WriteString("> Reset Options", Font_6x8, White);
+            {
+                // Main menu items (total 4 items: 0-3)
+                const char* menu_items[4] = {
+                    " Power Meter",
+                    " Peak Values", 
+                    " Settings",
+                    " Reset Options"
+                };
+                
+                ssd1306_SetCursor(0, 0);
+                ssd1306_WriteString("=== MAIN MENU ===", Font_6x8, White);
+                
+                // Calculate scroll window (show 3 items at a time)
+                uint8_t start_item = 0;
+                if (menu_selection >= 2) {
+                    start_item = menu_selection - 1;  // Keep selected item in middle when possible
+                    if (start_item > 1) start_item = 1;  // Don't scroll beyond last window
+                }
+                
+                // Display 3 visible items
+                for (uint8_t i = 0; i < 3 && (start_item + i) < 4; i++) {
+                    uint8_t item_index = start_item + i;
+                    char display_line[21];
+                    
+                    // Add selection marker
+                    sprintf(display_line, "%s%s", 
+                           (item_index == menu_selection) ? ">" : " ",
+                           menu_items[item_index]);
+                    
+                    ssd1306_SetCursor(0, 10 + (i * 8));  // Y positions: 10, 18, 26
+                    ssd1306_WriteString(display_line, Font_6x8, White);
+                }
+                
+                // Optional: Add scroll indicators
+                if (start_item > 0) {
+                    // Show "up arrow" indicator at top-right
+                    ssd1306_SetCursor(120, 10);
+                    ssd1306_WriteString("^", Font_6x8, White);
+                }
+                if (start_item + 3 < 4) {
+                    // Show "down arrow" indicator at bottom-right  
+                    ssd1306_SetCursor(120, 26);
+                    ssd1306_WriteString("v", Font_6x8, White);
+                }
             }
             break;
             
