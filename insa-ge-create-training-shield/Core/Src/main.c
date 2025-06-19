@@ -116,7 +116,7 @@ void Rotary_Encoder_Interrupt_Handler(void)
 		}
 		if (((rotary_state == 0b00) && (rotary_new == 0b01)) || ((rotary_state == 0b01) && (rotary_new == 0b11)) ||
 				((rotary_state == 0b11) && (rotary_new == 0b10)) || ((rotary_state == 0b10) && (rotary_new == 0b00))) {
-			//rotary_buffer --;
+			rotary_buffer --;
 		}
 		rotary_state = rotary_new;
 		if (rotary_buffer > 3) {
