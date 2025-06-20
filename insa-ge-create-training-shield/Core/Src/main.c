@@ -249,8 +249,7 @@ void Handle_Menu_Action(uint8_t press_type)
     } else { // Short press - enter/confirm
         switch (current_menu) {
             case MENU_POWER_METER:
-                current_menu = MENU_MAIN;
-                menu_selection = 0;
+                // No action on short press in power meter mode
                 break;
                 
             case MENU_MAIN:
