@@ -68,6 +68,8 @@ static float peak_power = 0.0f;
 // Button handling for reset functions
 static uint32_t button_press_time = 0;
 static uint8_t button_long_press_handled = 0;
+static uint32_t button_last_interrupt_time = 0;  // For debouncing
+static uint8_t button_stable_state = 0;          // Stable button state after debouncing
 
 // Menu system variables
 typedef enum {
@@ -83,6 +85,9 @@ static MenuState_t current_menu = MENU_POWER_METER;
 static uint8_t menu_selection = 0;      // Current menu item selection
 static uint8_t menu_changed = 1;        // Flag to trigger display update
 static uint32_t last_activity_time = 0; // For auto-return to power meter
+
+// Rotary encoder debouncing variables
+static uint32_t rotary_last_interrupt_time = 0;
 
 /* USER CODE END PV */
 
@@ -500,6 +505,16 @@ void Timer_Interrupt_Handler(void)
 	// Update peak values
 	Update_Peaks(simulated_voltage, simulated_current, simulated_power);
 	
+	// Check for button long press (moved from interrupt to timer for stability)
+	if (button_state && !button_long_press_handled) {
+		uint32_t press_duration = current_timestamp - button_press_time;
+		if (press_duration >= 2000) {
+			// Long press detected
+			Handle_Menu_Action(1); // Long press
+			button_long_press_handled = 1;
+		}
+	}
+	
 	// Check for auto-return to power meter (30 seconds timeout)
 	if (current_menu != MENU_POWER_METER && 
 	    (current_timestamp - last_activity_time) > 30000) {
@@ -517,76 +532,96 @@ void Timer_Interrupt_Handler(void)
 
 /**
   * @brief  Interrupt handler for User Button GPIO
-  * @note	This function handles button press/release for reset functions
-  *         - Short press: Reset peaks
-  *         - Long press (>2s): Reset energy
+  * @note	This function handles button press/release with enhanced debouncing
+  *         - Short press: Enter/confirm menu action
+  *         - Long press (>2s): Back/exit menu action
   */
 void User_Button_Interrupt_Handler(void)
 {
-	uint8_t current_button_state = HAL_GPIO_ReadPin(USER_BUTTON_GPIO_Port, USER_BUTTON_Pin);
+	uint32_t current_time = HAL_GetTick();
+	uint8_t raw_button_state = HAL_GPIO_ReadPin(USER_BUTTON_GPIO_Port, USER_BUTTON_Pin);
 	
-	if (current_button_state && !button_state) {
-		// Button pressed (rising edge)
-		button_press_time = HAL_GetTick();
-		button_long_press_handled = 0;
+	// Software debouncing: ignore interrupts within 20ms of last interrupt
+	if ((current_time - button_last_interrupt_time) < 20) {
+		return;
 	}
-	else if (!current_button_state && button_state) {
-		// Button released (falling edge)
-		uint32_t press_duration = HAL_GetTick() - button_press_time;
+	button_last_interrupt_time = current_time;
+	
+	// Only process if state actually changed from stable state
+	if (raw_button_state == button_stable_state) {
+		return;
+	}
+	
+	// State has changed and is stable
+	button_stable_state = raw_button_state;
+	
+	if (button_stable_state && !button_state) {
+		// Button pressed (rising edge after debouncing)
+		button_press_time = current_time;
+		button_long_press_handled = 0;
+		button_state = 1;
+	}
+	else if (!button_stable_state && button_state) {
+		// Button released (falling edge after debouncing)
+		uint32_t press_duration = current_time - button_press_time;
 		
-		if (press_duration >= 2000 && !button_long_press_handled) {
-			// Long press: Menu navigation
-			Handle_Menu_Action(1); // Long press
-		}
-		else if (press_duration >= 50 && press_duration < 2000) {
-			// Short press: Menu navigation (with debounce)
+		if (!button_long_press_handled && press_duration < 2000) {
+			// Short press only if long press wasn't already handled
 			Handle_Menu_Action(0); // Short press
 		}
+		button_state = 0;
 	}
-	else if (current_button_state && button_state) {
-		// Button held down - check for long press
-		uint32_t press_duration = HAL_GetTick() - button_press_time;
-		if (press_duration >= 2000 && !button_long_press_handled) {
-			// Long press detected - handle menu action immediately
-			Handle_Menu_Action(1); // Long press
-			button_long_press_handled = 1;
-		}
-	}
-	
-	button_state = current_button_state;
 }
 
 /**
   * @brief  Interrupt handler for Rotary Encoder Channel A
-  * @note	This function is called when a rising edge is detected on channel A of the rotary encoder
+  * @note	This function is called when edges are detected on rotary encoder channels
+  *         Uses software debouncing instead of HAL_Delay for better stability
   */
 void Rotary_Encoder_Interrupt_Handler(void)
 {
 	static int8_t rotary_buffer = 0;
-	/* Check for rotary encoder turned clockwise or counter-clockwise */
-	HAL_Delay(5);
+	uint32_t current_time = HAL_GetTick();
+	
+	// Software debouncing: ignore interrupts within 5ms of last interrupt
+	if ((current_time - rotary_last_interrupt_time) < 5) {
+		return;
+	}
+	rotary_last_interrupt_time = current_time;
+	
+	// Read encoder state
 	uint8_t rotary_new = HAL_GPIO_ReadPin(ROT_CHA_GPIO_Port, ROT_CHA_Pin) << 1;
 	rotary_new += HAL_GPIO_ReadPin(ROT_CHB_GPIO_Port, ROT_CHB_Pin);
+	
 	if (rotary_new != rotary_state) {
 		int8_t direction = 0;
 		
-		if (((rotary_state == 0b00) && (rotary_new == 0b10)) || ((rotary_state == 0b10) && (rotary_new == 0b11)) ||
-				((rotary_state == 0b11) && (rotary_new == 0b01)) || ((rotary_state == 0b01) && (rotary_new == 0b00))) {
-			rotary_buffer ++;
+		// Clockwise state transitions
+		if (((rotary_state == 0b00) && (rotary_new == 0b10)) || 
+		    ((rotary_state == 0b10) && (rotary_new == 0b11)) ||
+		    ((rotary_state == 0b11) && (rotary_new == 0b01)) || 
+		    ((rotary_state == 0b01) && (rotary_new == 0b00))) {
+			rotary_buffer++;
 		}
-		if (((rotary_state == 0b00) && (rotary_new == 0b01)) || ((rotary_state == 0b01) && (rotary_new == 0b11)) ||
-				((rotary_state == 0b11) && (rotary_new == 0b10)) || ((rotary_state == 0b10) && (rotary_new == 0b00))) {
-			rotary_buffer --;
+		
+		// Counter-clockwise state transitions
+		if (((rotary_state == 0b00) && (rotary_new == 0b01)) || 
+		    ((rotary_state == 0b01) && (rotary_new == 0b11)) ||
+		    ((rotary_state == 0b11) && (rotary_new == 0b10)) || 
+		    ((rotary_state == 0b10) && (rotary_new == 0b00))) {
+			rotary_buffer--;
 		}
+		
 		rotary_state = rotary_new;
 		
+		// Check if we have enough transitions for a full detent
 		if (rotary_buffer > 3) {
-			rotary_counter ++;
+			rotary_counter++;
 			rotary_buffer = 0;
 			direction = 1;  // Clockwise
 		}
 		if (rotary_buffer < -3) {
-			rotary_counter --;
+			rotary_counter--;
 			rotary_buffer = 0;
 			direction = -1; // Counter-clockwise
 		}
@@ -919,11 +954,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
-  /*Configure GPIO pins : ROT_CHA_Pin USER_BUTTON_Pin */
-  GPIO_InitStruct.Pin = ROT_CHA_Pin|USER_BUTTON_Pin;
+  /*Configure GPIO pin : USER_BUTTON_Pin */
+  GPIO_InitStruct.Pin = USER_BUTTON_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;  // Internal pull-up for button stability
+  HAL_GPIO_Init(USER_BUTTON_GPIO_Port, &GPIO_InitStruct);
+  
+  /*Configure GPIO pin : ROT_CHA_Pin */
+  GPIO_InitStruct.Pin = ROT_CHA_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_Init(ROT_CHA_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : ROT_CHB_Pin */
   GPIO_InitStruct.Pin = ROT_CHB_Pin;
