@@ -76,6 +76,8 @@ typedef enum {
     MENU_POWER_METER = 0,    // Main power meter display
     MENU_MAIN,               // Main menu
     MENU_PEAKS,              // Peak values display
+    MENU_GRAPHICS,           // Graphics display menu
+    MENU_GRAPHICS_SELECT,    // Graphics parameter selection
     MENU_SETTINGS,           // Settings menu
     MENU_RESET,              // Reset menu
     MENU_ABOUT               // About/Info
@@ -88,6 +90,14 @@ static uint32_t last_activity_time = 0; // For auto-return to power meter
 
 // Rotary encoder debouncing variables
 static uint32_t rotary_last_interrupt_time = 0;
+
+// Graphics functionality variables
+#define GRAPH_DATA_POINTS 64  // Number of data points for graph (64 points across 128 pixel width)
+static float voltage_history[GRAPH_DATA_POINTS];
+static float current_history[GRAPH_DATA_POINTS];
+static uint8_t graph_data_index = 0;
+static uint8_t graphics_parameter = 0;  // 0 = Voltage, 1 = Current
+static uint32_t last_graph_update = 0;
 
 /* USER CODE END PV */
 
@@ -195,9 +205,18 @@ void Handle_Menu_Navigation(int8_t direction)
         case MENU_MAIN:
             // Navigate main menu items
             if (direction > 0) {
-                menu_selection = (menu_selection + 1) % 4; // 4 main menu items
+                menu_selection = (menu_selection + 1) % 5; // 5 main menu items
             } else {
-                menu_selection = (menu_selection == 0) ? 3 : menu_selection - 1;
+                menu_selection = (menu_selection == 0) ? 4 : menu_selection - 1;
+            }
+            break;
+            
+        case MENU_GRAPHICS_SELECT:
+            // Navigate graphics parameter selection
+            if (direction > 0) {
+                menu_selection = (menu_selection + 1) % 3; // 3 graphics items (V, A, Back)
+            } else {
+                menu_selection = (menu_selection == 0) ? 2 : menu_selection - 1;
             }
             break;
             
@@ -256,14 +275,37 @@ void Handle_Menu_Action(uint8_t press_type)
                 switch (menu_selection) {
                     case 0: current_menu = MENU_POWER_METER; break;  // Back to Power Meter
                     case 1: current_menu = MENU_PEAKS; break;        // Peak Values
-                    case 2: current_menu = MENU_SETTINGS; menu_selection = 0; break; // Settings
-                    case 3: current_menu = MENU_RESET; menu_selection = 0; break;    // Reset
+                    case 2: current_menu = MENU_GRAPHICS_SELECT; menu_selection = 0; break; // Graphics
+                    case 3: current_menu = MENU_SETTINGS; menu_selection = 0; break; // Settings
+                    case 4: current_menu = MENU_RESET; menu_selection = 0; break;    // Reset
                 }
                 break;
                 
             case MENU_PEAKS:
                 current_menu = MENU_MAIN;
                 menu_selection = 1;
+                break;
+                
+            case MENU_GRAPHICS_SELECT:
+                switch (menu_selection) {
+                    case 0: // Voltage graph
+                        graphics_parameter = 0;
+                        current_menu = MENU_GRAPHICS;
+                        break;
+                    case 1: // Current graph
+                        graphics_parameter = 1;
+                        current_menu = MENU_GRAPHICS;
+                        break;
+                    case 2: // Back
+                        current_menu = MENU_MAIN;
+                        menu_selection = 2;
+                        break;
+                }
+                break;
+                
+            case MENU_GRAPHICS:
+                current_menu = MENU_GRAPHICS_SELECT;
+                menu_selection = graphics_parameter;
                 break;
                 
             case MENU_SETTINGS:
@@ -308,10 +350,11 @@ void Display_Current_Menu(void)
             
         case MENU_MAIN:
             {
-                // Main menu items (total 4 items: 0-3)
-                const char* menu_items[4] = {
+                // Main menu items (total 5 items: 0-4)
+                const char* menu_items[5] = {
                     " Power Meter",
-                    " Peak Values", 
+                    " Peak Values",
+                    " Graphics", 
                     " Settings",
                     " Reset Options"
                 };
@@ -323,11 +366,11 @@ void Display_Current_Menu(void)
                 uint8_t start_item = 0;
                 if (menu_selection >= 2) {
                     start_item = menu_selection - 1;  // Keep selected item in middle when possible
-                    if (start_item > 1) start_item = 1;  // Don't scroll beyond last window
+                    if (start_item > 2) start_item = 2;  // Don't scroll beyond last window (5-3=2)
                 }
                 
                 // Display 3 visible items
-                for (uint8_t i = 0; i < 3 && (start_item + i) < 4; i++) {
+                for (uint8_t i = 0; i < 3 && (start_item + i) < 5; i++) {
                     uint8_t item_index = start_item + i;
                     char display_line[21];
                     
@@ -346,7 +389,7 @@ void Display_Current_Menu(void)
                     ssd1306_SetCursor(120, 8);
                     ssd1306_WriteString("^", Font_6x8, White);
                 }
-                if (start_item + 3 < 4) {
+                if (start_item + 3 < 5) {
                     // Show "down arrow" indicator at bottom-right  
                     ssd1306_SetCursor(120, 24);
                     ssd1306_WriteString("v", Font_6x8, White);
@@ -399,13 +442,33 @@ void Display_Current_Menu(void)
             sprintf(line2, "%s Reset Energy", (menu_selection == 1) ? ">" : " ");
             sprintf(line3, "%s Cancel", (menu_selection == 2) ? ">" : " ");
             
-            ssd1306_SetCursor(0, 10);
+            ssd1306_SetCursor(0, 8);
             ssd1306_WriteString(line1, Font_6x8, White);
-            ssd1306_SetCursor(0, 18);
+            ssd1306_SetCursor(0, 16);
             ssd1306_WriteString(line2, Font_6x8, White);
-            ssd1306_SetCursor(0, 26);
+            ssd1306_SetCursor(0, 24);
             ssd1306_WriteString(line3, Font_6x8, White);
             break;
+            
+        case MENU_GRAPHICS_SELECT:
+            ssd1306_SetCursor(0, 0);
+            ssd1306_WriteString("=== GRAPHICS ===", Font_6x8, White);
+            
+            sprintf(line1, "%s Voltage (V)", (menu_selection == 0) ? ">" : " ");
+            sprintf(line2, "%s Current (A)", (menu_selection == 1) ? ">" : " ");
+            sprintf(line3, "%s Back", (menu_selection == 2) ? ">" : " ");
+            
+            ssd1306_SetCursor(0, 8);
+            ssd1306_WriteString(line1, Font_6x8, White);
+            ssd1306_SetCursor(0, 16);
+            ssd1306_WriteString(line2, Font_6x8, White);
+            ssd1306_SetCursor(0, 24);
+            ssd1306_WriteString(line3, Font_6x8, White);
+            break;
+            
+        case MENU_GRAPHICS:
+            Display_Graphics();
+            return; // Graphics has its own display logic
             
         case MENU_ABOUT:
             ssd1306_SetCursor(0, 0);
@@ -418,6 +481,101 @@ void Display_Current_Menu(void)
             ssd1306_WriteString("Board - INSA-GE", Font_6x8, White);
             break;
     }
+    
+    ssd1306_UpdateScreen();
+}
+
+/**
+  * @brief  Update graphics data buffer with current values
+  */
+void Update_Graphics_Data(void)
+{
+    uint32_t current_time = HAL_GetTick();
+    
+    // Update data every 200ms for smooth animation
+    if (current_time - last_graph_update > 200) {
+        voltage_history[graph_data_index] = simulated_voltage;
+        current_history[graph_data_index] = simulated_current;
+        
+        graph_data_index = (graph_data_index + 1) % GRAPH_DATA_POINTS;
+        last_graph_update = current_time;
+    }
+}
+
+/**
+  * @brief  Display graphics curve
+  */
+void Display_Graphics(void)
+{
+    char title_str[21] = {0};
+    float max_value = 0.0f;
+    float min_value = 0.0f;
+    float* data_array;
+    
+    // Clear screen
+    ssd1306_Fill(Black);
+    
+    // Select data source and find min/max for scaling
+    if (graphics_parameter == 0) {
+        // Voltage - use integer formatting
+        int v_int = (int)simulated_voltage;
+        int v_frac = (int)((simulated_voltage - v_int) * 10.0f);
+        sprintf(title_str, "Voltage: %d.%dV", v_int, v_frac);
+        data_array = voltage_history;
+        max_value = 30.0f;  // Max voltage range
+        min_value = 0.0f;
+    } else {
+        // Current - use integer formatting
+        int i_int = (int)simulated_current;
+        int i_frac = (int)((simulated_current - i_int) * 100.0f);
+        sprintf(title_str, "Current: %d.%02dA", i_int, i_frac);
+        data_array = current_history;
+        max_value = 5.0f;   // Max current range
+        min_value = 0.0f;
+    }
+    
+    // Display title
+    ssd1306_SetCursor(0, 0);
+    ssd1306_WriteString(title_str, Font_6x8, White);
+    
+    // Draw graph area (leaving space for title and axis labels)
+    uint8_t graph_height = 20;  // Graph height in pixels
+    uint8_t graph_y_offset = 10; // Start Y position for graph
+    
+    // Draw axes
+    // Y-axis
+    for (uint8_t y = 0; y < graph_height; y++) {
+        ssd1306_DrawPixel(10, graph_y_offset + y, White);
+    }
+    // X-axis
+    for (uint8_t x = 0; x < 110; x++) {
+        ssd1306_DrawPixel(10 + x, graph_y_offset + graph_height - 1, White);
+    }
+    
+    // Plot data points
+    for (uint8_t i = 0; i < GRAPH_DATA_POINTS - 1; i++) {
+        uint8_t data_index = (graph_data_index + i) % GRAPH_DATA_POINTS;
+        uint8_t next_index = (graph_data_index + i + 1) % GRAPH_DATA_POINTS;
+        
+        // Scale values to fit graph
+        uint8_t y1 = graph_y_offset + graph_height - 1 - 
+                     (uint8_t)((data_array[data_index] / max_value) * (graph_height - 2));
+        uint8_t y2 = graph_y_offset + graph_height - 1 - 
+                     (uint8_t)((data_array[next_index] / max_value) * (graph_height - 2));
+        
+        uint8_t x1 = 11 + (i * 110) / (GRAPH_DATA_POINTS - 1);
+        uint8_t x2 = 11 + ((i + 1) * 110) / (GRAPH_DATA_POINTS - 1);
+        
+        // Draw line between points
+        ssd1306_Line(x1, y1, x2, y2, White);
+    }
+    
+    // Add scale labels
+    ssd1306_SetCursor(0, graph_y_offset);
+    ssd1306_WriteString(graphics_parameter == 0 ? "30" : "5", Font_6x8, White);
+    
+    ssd1306_SetCursor(0, graph_y_offset + graph_height - 8);
+    ssd1306_WriteString("0", Font_6x8, White);
     
     ssd1306_UpdateScreen();
 }
@@ -504,6 +662,9 @@ void Timer_Interrupt_Handler(void)
 	// Update peak values
 	Update_Peaks(simulated_voltage, simulated_current, simulated_power);
 	
+	// Update graphics data buffer
+	Update_Graphics_Data();
+	
 	// Check for button long press (moved from interrupt to timer for stability)
 	if (button_state && !button_long_press_handled) {
 		uint32_t press_duration = current_timestamp - button_press_time;
@@ -527,8 +688,8 @@ void Timer_Interrupt_Handler(void)
 		Display_Current_Menu();
 		menu_changed = 0;
 	}
-	// Always update power meter display for real-time data
-	else if (current_menu == MENU_POWER_METER) {
+	// Always update power meter and graphics display for real-time data
+	else if (current_menu == MENU_POWER_METER || current_menu == MENU_GRAPHICS) {
 		Display_Current_Menu();
 	}
 }
