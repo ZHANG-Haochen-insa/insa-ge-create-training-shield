@@ -95,8 +95,9 @@ static uint32_t rotary_last_interrupt_time = 0;
 #define GRAPH_DATA_POINTS 64  // Number of data points for graph (64 points across 128 pixel width)
 static float voltage_history[GRAPH_DATA_POINTS];
 static float current_history[GRAPH_DATA_POINTS];
+static float power_history[GRAPH_DATA_POINTS];
 static uint8_t graph_data_index = 0;
-static uint8_t graphics_parameter = 0;  // 0 = Voltage, 1 = Current
+static uint8_t graphics_parameter = 0;  // 0 = Voltage, 1 = Current, 2 = Power
 static uint32_t last_graph_update = 0;
 
 /* USER CODE END PV */
@@ -214,9 +215,9 @@ void Handle_Menu_Navigation(int8_t direction)
         case MENU_GRAPHICS_SELECT:
             // Navigate graphics parameter selection
             if (direction > 0) {
-                menu_selection = (menu_selection + 1) % 3; // 3 graphics items (V, A, Back)
+                menu_selection = (menu_selection + 1) % 4; // 4 graphics items (V, A, P, Back)
             } else {
-                menu_selection = (menu_selection == 0) ? 2 : menu_selection - 1;
+                menu_selection = (menu_selection == 0) ? 3 : menu_selection - 1;
             }
             break;
             
@@ -296,7 +297,11 @@ void Handle_Menu_Action(uint8_t press_type)
                         graphics_parameter = 1;
                         current_menu = MENU_GRAPHICS;
                         break;
-                    case 2: // Back
+                    case 2: // Power graph
+                        graphics_parameter = 2;
+                        current_menu = MENU_GRAPHICS;
+                        break;
+                    case 3: // Back
                         current_menu = MENU_MAIN;
                         menu_selection = 2;
                         break;
@@ -451,19 +456,51 @@ void Display_Current_Menu(void)
             break;
             
         case MENU_GRAPHICS_SELECT:
-            ssd1306_SetCursor(0, 0);
-            ssd1306_WriteString("=== GRAPHICS ===", Font_6x8, White);
-            
-            sprintf(line1, "%s Voltage (V)", (menu_selection == 0) ? ">" : " ");
-            sprintf(line2, "%s Current (A)", (menu_selection == 1) ? ">" : " ");
-            sprintf(line3, "%s Back", (menu_selection == 2) ? ">" : " ");
-            
-            ssd1306_SetCursor(0, 8);
-            ssd1306_WriteString(line1, Font_6x8, White);
-            ssd1306_SetCursor(0, 16);
-            ssd1306_WriteString(line2, Font_6x8, White);
-            ssd1306_SetCursor(0, 24);
-            ssd1306_WriteString(line3, Font_6x8, White);
+            {
+                // Graphics menu items (total 4 items: 0-3)
+                const char* graphics_items[4] = {
+                    " Voltage (V)",
+                    " Current (A)",
+                    " Power (W)",
+                    " Back"
+                };
+                
+                ssd1306_SetCursor(0, 0);
+                ssd1306_WriteString("=== GRAPHICS ===", Font_6x8, White);
+                
+                // Calculate scroll window (show 3 items at a time)
+                uint8_t start_item = 0;
+                if (menu_selection >= 2) {
+                    start_item = menu_selection - 1;  // Keep selected item in middle when possible
+                    if (start_item > 1) start_item = 1;  // Don't scroll beyond last window (4-3=1)
+                }
+                
+                // Display 3 visible items
+                for (uint8_t i = 0; i < 3 && (start_item + i) < 4; i++) {
+                    uint8_t item_index = start_item + i;
+                    char display_line[21];
+                    
+                    // Add selection marker
+                    sprintf(display_line, "%s%s", 
+                           (item_index == menu_selection) ? ">" : " ",
+                           graphics_items[item_index]);
+                    
+                    ssd1306_SetCursor(0, 8 + (i * 8));  // Y positions: 8, 16, 24
+                    ssd1306_WriteString(display_line, Font_6x8, White);
+                }
+                
+                // Optional: Add scroll indicators
+                if (start_item > 0) {
+                    // Show "up arrow" indicator at top-right
+                    ssd1306_SetCursor(120, 8);
+                    ssd1306_WriteString("^", Font_6x8, White);
+                }
+                if (start_item + 3 < 4) {
+                    // Show "down arrow" indicator at bottom-right  
+                    ssd1306_SetCursor(120, 24);
+                    ssd1306_WriteString("v", Font_6x8, White);
+                }
+            }
             break;
             
         case MENU_GRAPHICS:
@@ -496,6 +533,7 @@ void Update_Graphics_Data(void)
     if (current_time - last_graph_update > 200) {
         voltage_history[graph_data_index] = simulated_voltage;
         current_history[graph_data_index] = simulated_current;
+        power_history[graph_data_index] = simulated_power;
         
         graph_data_index = (graph_data_index + 1) % GRAPH_DATA_POINTS;
         last_graph_update = current_time;
@@ -524,13 +562,21 @@ void Display_Graphics(void)
         data_array = voltage_history;
         max_value = 30.0f;  // Max voltage range
         min_value = 0.0f;
-    } else {
+    } else if (graphics_parameter == 1) {
         // Current - use integer formatting
         int i_int = (int)simulated_current;
         int i_frac = (int)((simulated_current - i_int) * 100.0f);
         sprintf(title_str, "Current: %d.%02dA", i_int, i_frac);
         data_array = current_history;
         max_value = 5.0f;   // Max current range
+        min_value = 0.0f;
+    } else {
+        // Power - use integer formatting
+        int p_int = (int)simulated_power;
+        int p_frac = (int)((simulated_power - p_int) * 10.0f);
+        sprintf(title_str, "Power: %d.%dW", p_int, p_frac);
+        data_array = power_history;
+        max_value = 150.0f;  // Max power range (30V * 5A = 150W)
         min_value = 0.0f;
     }
     
@@ -572,7 +618,13 @@ void Display_Graphics(void)
     
     // Add scale labels
     ssd1306_SetCursor(0, graph_y_offset);
-    ssd1306_WriteString(graphics_parameter == 0 ? "30" : "5", Font_6x8, White);
+    if (graphics_parameter == 0) {
+        ssd1306_WriteString("30", Font_6x8, White);  // Voltage
+    } else if (graphics_parameter == 1) {
+        ssd1306_WriteString("5", Font_6x8, White);   // Current
+    } else {
+        ssd1306_WriteString("150", Font_6x8, White); // Power
+    }
     
     ssd1306_SetCursor(0, graph_y_offset + graph_height - 8);
     ssd1306_WriteString("0", Font_6x8, White);
