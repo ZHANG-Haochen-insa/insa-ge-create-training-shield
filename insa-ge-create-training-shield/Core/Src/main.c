@@ -332,19 +332,19 @@ void Display_Current_Menu(void)
                            (item_index == menu_selection) ? ">" : " ",
                            menu_items[item_index]);
                     
-                    ssd1306_SetCursor(0, 10 + (i * 8));  // Y positions: 10, 18, 26
+                    ssd1306_SetCursor(0, 8 + (i * 8));  // Y positions: 8, 16, 24
                     ssd1306_WriteString(display_line, Font_6x8, White);
                 }
                 
                 // Optional: Add scroll indicators
                 if (start_item > 0) {
                     // Show "up arrow" indicator at top-right
-                    ssd1306_SetCursor(120, 10);
+                    ssd1306_SetCursor(120, 8);
                     ssd1306_WriteString("^", Font_6x8, White);
                 }
                 if (start_item + 3 < 4) {
                     // Show "down arrow" indicator at bottom-right  
-                    ssd1306_SetCursor(120, 26);
+                    ssd1306_SetCursor(120, 24);
                     ssd1306_WriteString("v", Font_6x8, White);
                 }
             }
