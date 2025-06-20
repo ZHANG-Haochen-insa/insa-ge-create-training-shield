@@ -523,10 +523,14 @@ void Timer_Interrupt_Handler(void)
 		menu_changed = 1;
 	}
 	
-	// Update display only if menu changed or we're in power meter mode
-	if (menu_changed || current_menu == MENU_POWER_METER) {
+	// Update display for all menu states to prevent screen freeze during transitions
+	if (menu_changed) {
 		Display_Current_Menu();
 		menu_changed = 0;
+	}
+	// Always update power meter display for real-time data
+	else if (current_menu == MENU_POWER_METER) {
+		Display_Current_Menu();
 	}
 }
 
